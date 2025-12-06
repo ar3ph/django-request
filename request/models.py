@@ -76,7 +76,6 @@ class Request(models.Model):
         # @see: https://github.com/kylef/django-request/issues/54
         self.ip = get_ip(request) if not None else request_settings.IP_DUMMY
 
-        # User information.
         self.referer = request.META.get("HTTP_REFERER", "")[:255]
         self.user_agent = request.META.get("HTTP_USER_AGENT", "")[:255]
         self.language = request.META.get("HTTP_ACCEPT_LANGUAGE", "")[:255]
