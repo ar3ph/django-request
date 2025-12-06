@@ -2,10 +2,10 @@ from socket import gethostbyaddr
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from ipware.ip import get_ip
 from django.db import models
 from django.utils import timezone
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ugettext_lazy as _
+from ipware.ip import get_ip
 
 from . import settings as request_settings
 from .managers import RequestManager
@@ -74,8 +74,9 @@ class Request(models.Model):
         # User infomation
 
         # @see: https://github.com/kylef/django-request/issues/54
-        self.ip = get_ip(request) if not None else '0.0.0.0'
-		
+        self.ip = get_ip(request) if not None else request_settings.IP_DUMMY
+
+        # User information.
         self.referer = request.META.get("HTTP_REFERER", "")[:255]
         self.user_agent = request.META.get("HTTP_USER_AGENT", "")[:255]
         self.language = request.META.get("HTTP_ACCEPT_LANGUAGE", "")[:255]
