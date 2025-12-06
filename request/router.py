@@ -1,9 +1,9 @@
 import re
 
 
-class RegexPattern(object):
-    def __init__(self, regex, name=''):
-        self.regex = re.compile(regex, re.UNICODE)
+class RegexPattern:
+    def __init__(self, regex, name=""):
+        self.regex = re.compile(regex)
         self.name = name
 
     def resolve(self, string):
@@ -12,16 +12,16 @@ class RegexPattern(object):
             return self.name, match.groupdict()
 
 
-class patterns(object):
+class Patterns:
     def __init__(self, unknown, *args):
-        self.patterns = []
+        self.patterns = ()
         self.unknown = unknown
 
         for pattern in args:
-            if pattern.__class__ == str:
-                self.patterns.append(RegexPattern(pattern))
+            if isinstance(pattern, str):
+                self.patterns += (RegexPattern(pattern),)
             else:
-                self.patterns.append(RegexPattern(*pattern))
+                self.patterns += (RegexPattern(*pattern),)
 
     def resolve(self, name):
         for pattern in self.patterns:

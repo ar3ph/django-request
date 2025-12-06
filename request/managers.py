@@ -1,104 +1,134 @@
 import datetime
 import time
 
+from dateutil.relativedelta import relativedelta
 from django.db import models
-from django.contrib.auth.models import User
+from django.db.models import Q
+from django.utils import timezone
 
-try:  # For python <= 2.3
-    set()
-except NameError:
-    from sets import Set as set
+from .utils import BASE_URL, handle_naive_datetime
 
-QUERYSET_PROXY_METHODS = ('year', 'month', 'week', 'day', 'today', 'this_week', 'this_month', 'this_year', 'unique_visits', 'attr_list', 'search')
+QUERYSET_PROXY_METHODS = (
+    "year",
+    "month",
+    "week",
+    "day",
+    "today",
+    "this_week",
+    "this_month",
+    "this_year",
+    "unique_visits",
+    "attr_list",
+    "search",
+)
 
 
 class RequestQuerySet(models.query.QuerySet):
     def year(self, year):
         return self.filter(time__year=year)
 
-    def month(self, year=None, month=None, month_format='%b', date=None):
+    def month(self, year=None, month=None, month_format="%b", date=None):
         if not date:
             try:
                 if year and month:
-                    date = datetime.date(*time.strptime(year + month, '%Y' + month_format)[:3])
+                    date = datetime.date(
+                        *time.strptime(year + month, "%Y" + month_format)[:3]
+                    )
                 else:
-                    raise TypeError('Request.objects.month() takes exactly 2 arguments')
+                    raise TypeError("Request.objects.month() takes exactly 2 arguments")
             except ValueError:
                 return
-
-        # Calculate first and last day of month, for use in a date-range lookup.
-        first_day = date.replace(day=1)
-        if first_day.month == 12:
-            last_day = first_day.replace(year=first_day.year + 1, month=1)
-        else:
-            last_day = first_day.replace(month=first_day.month + 1)
-
-        lookup_kwargs = {
-            'time__gte': first_day,
-            'time__lt': last_day,
-        }
-
-        return self.filter(**lookup_kwargs)
+        # Truncate to date.
+        if isinstance(date, datetime.datetime):
+            date = date.date()
+        # Calculate first and last day of month, for use in a date-range
+        # lookup.
+        first_day = datetime.datetime.combine(date.replace(day=1), datetime.time.min)
+        last_day = first_day + relativedelta(months=1)
+        return self.filter(
+            time__gte=handle_naive_datetime(first_day),
+            time__lt=handle_naive_datetime(last_day),
+        )
 
     def week(self, year, week):
         try:
-            date = datetime.date(*time.strptime(year + '-0-' + week, '%Y-%w-%U')[:3])
+            date = datetime.date(*time.strptime(year + "-0-" + week, "%Y-%w-%U")[:3])
         except ValueError:
             return
 
-        # Calculate first and last day of week, for use in a date-range lookup.
-        first_day = date
-        last_day = date + datetime.timedelta(days=7)
-        lookup_kwargs = {
-            'time__gte': first_day,
-            'time__lt': last_day,
-        }
+        first_day = datetime.datetime.combine(date, datetime.time.min)
+        last_day = first_day + datetime.timedelta(days=7)
+        return self.filter(
+            time__gte=handle_naive_datetime(first_day),
+            time__lt=handle_naive_datetime(last_day),
+        )
 
-        return self.filter(**lookup_kwargs)
-
-    def day(self, year=None, month=None, day=None, month_format='%b', day_format='%d', date=None):
+    def day(
+        self,
+        year=None,
+        month=None,
+        day=None,
+        month_format="%b",
+        day_format="%d",
+        date=None,
+    ):
         if not date:
             try:
                 if year and month and day:
-                    date = datetime.datetime.date(*time.strptime(year + month + day, '%Y' + month_format + day_format)[:3])
+                    date = datetime.date(
+                        *time.strptime(
+                            year + month + day, "%Y" + month_format + day_format
+                        )[:3]
+                    )
                 else:
-                    raise TypeError('Request.objects.day() takes exactly 3 arguments')
+                    raise TypeError("Request.objects.day() takes exactly 3 arguments")
             except ValueError:
                 return
-
-        return self.filter(time__range=(datetime.datetime.combine(date, datetime.time.min), datetime.datetime.combine(date, datetime.time.max)))
+        return self.filter(
+            time__range=(
+                handle_naive_datetime(
+                    datetime.datetime.combine(date, datetime.time.min)
+                ),
+                handle_naive_datetime(
+                    datetime.datetime.combine(date, datetime.time.max)
+                ),
+            )
+        )
 
     def today(self):
         return self.day(date=datetime.date.today())
 
     def this_year(self):
-        return self.year(datetime.datetime.now().year)
+        return self.year(datetime.date.today().year)
 
     def this_month(self):
         return self.month(date=datetime.date.today())
 
     def this_week(self):
         today = datetime.date.today()
-        return self.week(str(today.year), str(today.isocalendar()[1] - 1))
+        return self.week(str(today.year), today.strftime("%U"))
 
     def unique_visits(self):
-        from request import settings
-        return self.exclude(referer__startswith=settings.REQUEST_BASE_URL)
+        return self.exclude(referer__startswith=BASE_URL)
 
     def attr_list(self, name):
         return [getattr(item, name, None) for item in self if hasattr(item, name)]
 
     def search(self):
-        return self.filter(referer__contains='google') | self.filter(referer__contains='yahoo') | self.filter(referer__contains='bing')
+        return self.filter(
+            Q(referer__contains="google")
+            | Q(referer__contains="yahoo")
+            | Q(referer__contains="bing")
+        )
 
 
 class RequestManager(models.Manager):
-    def __getattr__(self, attr):
+    def __getattr__(self, attr, *args, **kwargs):
         if attr in QUERYSET_PROXY_METHODS:
-            return getattr(self.get_query_set(), attr, None)
-        super(RequestManager, self).__getattr__(*args, **kwargs)
+            return getattr(self.get_queryset(), attr, None)
+        super().__getattr__(*args, **kwargs)
 
-    def get_query_set(self):
+    def get_queryset(self):
         return RequestQuerySet(self.model)
 
     def active_users(self, **options):
@@ -116,9 +146,9 @@ class RequestManager(models.Manager):
         qs = self.filter(user__isnull=False)
 
         if options:
-            time = datetime.datetime.now() - datetime.timedelta(**options)
+            time = timezone.now() - datetime.timedelta(**options)
             qs = qs.filter(time__gte=time)
 
-        requests = qs.select_related('user').only('user')
+        requests = qs.select_related("user").only("user")
 
         return set([request.user for request in requests])

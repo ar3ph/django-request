@@ -1,158 +1,207 @@
-import re
-
 from time import mktime
 
-from django.utils.translation import ugettext, ugettext_lazy as _
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Count
-from django.utils.translation import string_concat
+from django.utils.text import format_lazy
+from django.utils.translation import gettext
+from django.utils.translation import gettext_lazy as _
 
-from request import settings
-from request.models import Request
-
-# Calculate the verbose_name by converting from InitialCaps to "lowercase with spaces".
-get_verbose_name = lambda class_name: re.sub('(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))', ' \\1', class_name).strip()
+from . import settings
+from .utils import BASE_URL, get_verbose_name
 
 
-class Modules(object):
+class Modules:
+    """
+    Set of :class:`.Module`.
+    """
+
     def load(self):
-        from django.utils.importlib import import_module
-        from django.core import exceptions
+        """
+        Import and instanciate modules defined in
+        ``settings.TRAFFIC_MODULES``.
+        """
+        from importlib import import_module
 
-        self._modules = []
-        for module_path in settings.REQUEST_TRAFFIC_MODULES:
+        self._modules = ()
+        for module_path in settings.TRAFFIC_MODULES:
             try:
-                dot = module_path.rindex('.')
+                dot = module_path.rindex(".")
             except ValueError:
-                raise exceptions.ImproperlyConfigured, '%s isn\'t a traffic module' % module_path
-            traffic_module, traffic_classname = module_path[:dot], module_path[dot + 1:]
+                raise ImproperlyConfigured(
+                    "{0} isn't a traffic module".format(module_path)
+                )
+            traffic_module = module_path[:dot]
+            traffic_classname = module_path[dot + 1 :]
 
             try:
                 mod = import_module(traffic_module)
-            except ImportError, e:
-                raise exceptions.ImproperlyConfigured, 'Error importing module %s: "%s"' % (traffic_module, e)
+            except ImportError as err:
+                raise ImproperlyConfigured(
+                    'Error importing module {0}: "{1}"'.format(traffic_module, err)
+                )
 
             try:
                 traffic_class = getattr(mod, traffic_classname)
             except AttributeError:
-                raise exceptions.ImproperlyConfigured, 'Traffic module "%s" does not define a "%s" class' % (traffic_module, traffic_classname)
+                raise ImproperlyConfigured(
+                    'Traffic module "{0}" does not define a "{1}" class'.format(
+                        traffic_module,
+                        traffic_classname,
+                    )
+                )
 
-            self._modules.append(traffic_class())
+            self._modules += (traffic_class(),)
 
+    @property
     def modules(self):
-        if not hasattr(self, '_modules'):
+        """
+        Get loaded modules, load them if isn't already made.
+        """
+        if not hasattr(self, "_modules"):
             self.load()
         return self._modules
-    modules = property(modules)
 
     def table(self, queries):
-        return [(module.verbose_name_plural, [module.count(qs) for qs in queries]) for module in self.modules]
+        """
+        Get a list of modules' counters.
+        """
+        return tuple(
+            [
+                (module.verbose_name_plural, [module.count(qs) for qs in queries])
+                for module in self.modules
+            ]
+        )
 
     def graph(self, days):
-        return [{'data':[(mktime(day.timetuple()) * 1000, module.count(qs)) for day, qs in days], 'label':ugettext(module.verbose_name_plural)} for module in self.modules]
+        """
+        Get a list of modules' counters for all the given days.
+        """
+        return tuple(
+            [
+                {
+                    "data": [
+                        (mktime(day.timetuple()) * 1000, module.count(qs))
+                        for day, qs in days
+                    ],
+                    "label": str(gettext(module.verbose_name_plural)),
+                }
+                for module in self.modules
+            ]
+        )
+
 
 modules = Modules()
 
 
-class Module(object):
+class Module:
+    """
+    Base module class.
+    """
+
     def __init__(self):
         self.module_name = self.__class__.__name__
 
-        if not hasattr(self, 'verbose_name'):
-            self.verbose_name = _(get_verbose_name(self.module_name))
-        if not hasattr(self, 'verbose_name_plural'):
-            self.verbose_name_plural = string_concat(self.verbose_name, 's')
+        if not hasattr(self, "verbose_name"):
+            self.verbose_name = get_verbose_name(self.module_name)
+        if not hasattr(self, "verbose_name_plural"):
+            self.verbose_name_plural = format_lazy("{}{}", self.verbose_name, "s")
+
+    def count(self, qs):
+        raise NotImplementedError('"count" isn\'t defined.')
 
 
 class Ajax(Module):
-    verbose_name_plural = _('Ajax')
+    verbose_name_plural = _("Ajax")
 
     def count(self, qs):
         return qs.filter(is_ajax=True).count()
 
 
 class NotAjax(Module):
-    verbose_name = _('Not Ajax')
-    verbose_name_plural = _('Not Ajax')
+    verbose_name = _("Not Ajax")
+    verbose_name_plural = _("Not Ajax")
 
     def count(self, qs):
         return qs.filter(is_ajax=False).count()
 
 
 class Error(Module):
-    verbose_name = _('Error')
-    verbose_name_plural = _('Errors')
+    verbose_name = _("Error")
+    verbose_name_plural = _("Errors")
 
     def count(self, qs):
         return qs.filter(response__gte=400).count()
 
 
 class Error404(Module):
-    verbose_name = _('Error 404')
-    verbose_name_plural = _('Errors 404')
+    verbose_name = _("Error 404")
+    verbose_name_plural = _("Errors 404")
 
     def count(self, qs):
         return qs.filter(response=404).count()
 
 
 class Hit(Module):
-    verbose_name = _('Hit')
-    verbose_name_plural = _('Hits')
+    verbose_name = _("Hit")
+    verbose_name_plural = _("Hits")
 
     def count(self, qs):
         return qs.count()
 
 
 class Search(Module):
-    verbose_name = _('Search')
-    verbose_name_plural = _('Searches')
+    verbose_name = _("Search")
+    verbose_name_plural = _("Searches")
 
     def count(self, qs):
         return qs.search().count()
 
 
 class Secure(Module):
-    verbose_name = _('Secure')
-    verbose_name_plural = _('Secure')
+    verbose_name = _("Secure")
+    verbose_name_plural = _("Secure")
 
     def count(self, qs):
         return qs.filter(is_secure=True).count()
 
 
 class Unsecure(Module):
-    verbose_name = _('Unsecure')
-    verbose_name_plural = _('Unsecure')
+    verbose_name = _("Unsecure")
+    verbose_name_plural = _("Unsecure")
 
     def count(self, qs):
         return qs.filter(is_secure=False).count()
 
 
 class UniqueVisit(Module):
-    verbose_name = _('Unique Visit')
-    verbose_name_plural = _('Unique Visits')
+    verbose_name = _("Unique Visit")
+    verbose_name_plural = _("Unique Visits")
 
     def count(self, qs):
-        return qs.exclude(referer__startswith=settings.REQUEST_BASE_URL).count()
+        return qs.exclude(
+            referer__startswith=BASE_URL,
+        ).count()
 
 
 class UniqueVisitor(Module):
-    verbose_name = _('Unique Visitor')
-    verbose_name_plural = _('Unique Visitor')
+    verbose_name = _("Unique Visitor")
+    verbose_name_plural = _("Unique Visitor")
 
     def count(self, qs):
-        return qs.aggregate(Count('ip', distinct=True))['ip__count']
+        return qs.aggregate(Count("ip", distinct=True))["ip__count"]
 
 
 class User(Module):
-    verbose_name = _('User')
-    verbose_name_plural = _('User')
+    verbose_name = _("User")
+    verbose_name_plural = _("User")
 
     def count(self, qs):
         return qs.exclude(user__isnull=False).count()
 
 
 class UniqueUser(Module):
-    verbose_name = _('Unique User')
-    verbose_name_plural = _('Unique User')
+    verbose_name = _("Unique User")
+    verbose_name_plural = _("Unique User")
 
     def count(self, qs):
-        return qs.aggregate(Count('user', distinct=True))['user__count']
+        return qs.aggregate(Count("user", distinct=True))["user__count"]
